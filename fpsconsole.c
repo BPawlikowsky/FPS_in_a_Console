@@ -6,10 +6,16 @@
 #include <time.h>
 #include <wchar.h>
 #include <locale.h>
+#include "sglib.h"
+#define sinf(x) (float)sin((double)(x))
+#define cosf(x) (float)cos((double)(x))
+
+//Global VARS
 int nScreenWidth = 120;
 int nScreenHeight = 40;
-int nWarpSpeed = 100;
+int nWarpSpeed = 2.5;
 
+//Player coordinates on map and facing angle
 double fPlayerX = 8.0f;
 double fPlayerY = 8.0f;
 double fPlayerA = 0.0f;
@@ -17,31 +23,54 @@ double fPlayerA = 0.0f;
 int nMapWidth = 16;
 int nMapHeight = 16;
 char map[16*16];
+
 double fFOV = 3.142159 / 4.0f;
 double fDepth = 16.0f;
 
+//Struct for the vector array containing
+// distance and dot product to calculate
+// corners of tiles + a sort define for SGLIB
+struct vec {
+  float d;
+  float dot;
+};
+#define CMP_VEC(p1,p2) ((float)((p1.d) - (p2.d)))
+
+//function definitions
 void setup();
 void map_setup(char arr[]);
 
+//MAIN
 int main(void)
 {
-  setlocale(LC_ALL, "");
-  wchar_t screen[nScreenHeight*nScreenWidth+1];
+  setlocale(LC_ALL, "");         //needed for wide chars(Unicode) display
+  struct vec {
+    float d;
+    float dot;
+  } p[2*2];
+  int pi = 0;                    //p array iterator
+
+  // Screen buffer
+  wchar_t screen[nScreenHeight*nScreenWidth];
+  // FPS vars
   double tp1 = clock();
   double tp2 = clock();
+  time_t t1 = time(NULL);
+  time_t t2 = time(NULL);
   int frames = 0;
-  int t1 = time(NULL);
-  int t2 = time(NULL);
   int fps  = 0;
+
   //generate map string
   map_setup(map);
-  // Ncurses SETUP
+
+  // SETUP
   setup();
 
+  //Main LOOP
   while(1)
   {
     tp2 = clock();
-    double fElapsedTime = ((tp2 - tp1) / CLOCKS_PER_SEC);
+    float fElapsedTime =0.1 - (difftime(tp2, tp1) /CLOCKS_PER_SEC);
     tp1 = tp2;
     t2 = time(NULL);
 
@@ -53,28 +82,39 @@ int main(void)
       fPlayerA += 0.1f * fElapsedTime * nWarpSpeed;
     if(cInput == 'w')
     {
-      fPlayerX += sin(fPlayerA) * 5.0f * fElapsedTime * nWarpSpeed;
-      fPlayerY += cos(fPlayerA) * 5.0f * fElapsedTime * nWarpSpeed;
+      fPlayerX += cosf(fPlayerA) * fElapsedTime* nWarpSpeed;
+      fPlayerY += sinf(fPlayerA) * fElapsedTime* nWarpSpeed;
+      if(map[(int)fPlayerY * nMapWidth + (int)fPlayerX] == '#')
+      {
+        fPlayerX -= cosf(fPlayerA) * 5.0f * fElapsedTime* nWarpSpeed;
+        fPlayerY -= sinf(fPlayerA) * 5.0f * fElapsedTime* nWarpSpeed;
+      }
     }
     if(cInput == 's')
       {
-        fPlayerX -= sin(fPlayerA) * 5.0f * fElapsedTime * nWarpSpeed;
-        fPlayerY -= cos(fPlayerA) * 5.0f * fElapsedTime * nWarpSpeed;
+        fPlayerX -= cosf(fPlayerA) * 5.0f * fElapsedTime* nWarpSpeed;
+        fPlayerY -= sinf(fPlayerA) * 5.0f * fElapsedTime* nWarpSpeed;
+        if(map[(int)fPlayerY * nMapWidth + (int)fPlayerX] == '#')
+          {
+            fPlayerX += cosf(fPlayerA) * 5.0f * fElapsedTime* nWarpSpeed;
+            fPlayerY += sinf(fPlayerA) * 5.0f * fElapsedTime* nWarpSpeed;
+          }
       }
 
     for(int x = 0; x < nScreenWidth; x++)
     {
-      double fRayAngle = (fPlayerA - fFOV / 2.0f) + ((double)x / (double)nScreenWidth) *fFOV;
-      double fDistanceToWall = 0;
+      float fRayAngle = (fPlayerA - fFOV / 2.0f) + ((float)x / (float)nScreenWidth) *fFOV;
+      float fDistanceToWall = 0;
       bool bHitWall = false;
 
-      double fEyeX = sin(fRayAngle);
-      double fEyeY = cos(fRayAngle);
+      float fEyeX = cosf(fRayAngle);
+      float fEyeY = sinf(fRayAngle);
+      bool bBoundry = false;
 
       while(!bHitWall && fDistanceToWall < fDepth)
       {
         fDistanceToWall += 0.1f;
-
+        pi = 0;
         int nTestX = (int)(fPlayerX + fEyeX * fDistanceToWall);
         int nTestY = (int)(fPlayerY + fEyeY * fDistanceToWall);
 
@@ -89,21 +129,40 @@ int main(void)
           if(map[nTestY * nMapWidth + nTestX] == '#')
           {
             bHitWall = true;
+            for(int tx = 0; tx < 2; tx++)
+              for(int ty = 0;ty < 2; ty++)
+              {
+                float vy = (float)nTestY + ty - fPlayerY;
+                float vx = (float)nTestX + tx - fPlayerX;
+                float dist = sqrt(vx*vx + vy*vy);
+                float dot = (fEyeX * vx / dist) + (fEyeY * vy / dist);
+                p[pi].d = dist;
+                p[pi].dot = dot;
+                pi++;
+              }
+
+            SGLIB_ARRAY_SINGLE_HEAP_SORT(struct vec, p, 2*2, CMP_VEC);
+
+            float fBound = 0.005;
+            if(acos(p[0].dot) < fBound) bBoundry = true;
+            if(acos(p[1].dot) < fBound) bBoundry = true;
           }
         }
 
         //Calculate distance to ceiling and floor
-        int nCeiling = (double)(nScreenHeight / 2.0) - nScreenHeight / ((double)fDistanceToWall);
+        int nCeiling = (float)(nScreenHeight / 2.0) - nScreenHeight / ((float)fDistanceToWall);
         int nFloor = nScreenHeight - nCeiling;
 
 
-        short sShader = ' ';
+        wchar_t sShader = L' ';
 
         if(fDistanceToWall <= fDepth/4.0f) sShader = L'\u2588';
         else if(fDistanceToWall < fDepth/3.0f) sShader = L'\u2593';
         else if(fDistanceToWall < fDepth/2.0f) sShader = L'\u2592';
         else if(fDistanceToWall < fDepth) sShader = L'\u2591';
-        else sShader = ' ';
+        else sShader = L' ';
+
+        if(bBoundry) sShader = L' ';
 
         //Render to screen buffer
         for(int y = 0; y < nScreenHeight; y++)
@@ -126,14 +185,19 @@ int main(void)
       }
     }
 
-
     //Display
-    screen[nScreenHeight*nScreenWidth-1] = '\0';
     move(0,0);
     addwstr(screen);
     move(0,0);
-    printw("El Time: %f | fps: %d/60 ", fElapsedTime, fps);
+    printw("El Time: %f | fps: %d/60 | X: %d Y: %d | Angle: %f",
+           fElapsedTime, fps, (int)fPlayerX, (int)fPlayerY, fPlayerA);
+    for(int y = 0; y < nMapHeight; y++)
+      for(int x = 0; x < nMapWidth; x++)
+        mvaddch(y+1,x,map[x+(y*nMapHeight)]);
+    mvaddch((int)fPlayerY+1,(int)fPlayerX,'P');
     refresh();
+
+    //Frame count
     frames++;
     if(t2-t1 >= 1)
     {
@@ -163,7 +227,7 @@ void map_setup(char arr[])
 {
   char map00[] = "################";
   char map01[] = "#..............#";
-  char map02[] = "#..............#";
+  char map02[] = "#.........#....#";
   char map03[] = "#..............#";
   char map04[] = "#..............#";
   char map05[] = "#..............#";
@@ -174,7 +238,7 @@ void map_setup(char arr[])
   char map10[] = "#..............#";
   char map11[] = "#..............#";
   char map12[] = "#..............#";
-  char map13[] = "#..............#";
+  char map13[] = "#.....##########";
   char map14[] = "#..............#";
   char map15[] = "################";
   strcat(map00, map01);
